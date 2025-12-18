@@ -2,64 +2,247 @@ name: Deploy Ramanasa.com
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options: [production]
+        default: production
+
+env:
+  SITE_NAME: ramanasa
+  DOMAIN: ramanasa.com
+  SOURCE_REPO: Solumentics-Waps-Digital-Collaboration/ramana-website
+  SOURCE_BRANCH: main
+  DEPLOY_PATH: /var/www/sites/ramanasa
+  SCRIPTS_PATH: /var/www/deployment-hub/sites/ramanasa
 
 jobs:
-  deploy:
+  # =========================
+  # Stage 1: Setup + Validation
+  # =========================
+  setup:
+    name: Stage 1 - Setup and Validation
     runs-on: ubuntu-latest
-    
+    outputs:
+      commit-sha: ${{ steps.get-commit.outputs.sha }}
+      deploy-time: ${{ steps.get-time.outputs.time }}
     steps:
-      - name: Stage 1 - Connection Check
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            echo "Connected to VPS successfully!"
-            echo "Server: $(hostname)"
-            echo "User: $(whoami)"
-      
-      - name: Stage 2 - Prepare Deployment
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            echo "Preparing deployment environment..."
-            cd /var/www/deployment-hub/sites/ramanasa
-            chmod +x deploy.sh
-            echo "Ready to deploy!"
-      
-      - name: Stage 3 - Clone & Build
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            echo "Cloning repo and building site..."
-            cd /var/www/deployment-hub/sites/ramanasa
-            ./deploy.sh
-      
-      - name: Stage 4 - Deploy to Production
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            echo "Website deployed to /var/www/sites/ramanasa"
-            echo "Nginx is now serving ramanasa.com"
-      
-      - name: Stage 5 - Verification
+      - name: Get deployment timestamp
+        id: get-time
         run: |
-          echo "========================================="
-          echo "Deployment Complete!"
-          echo "Live at: https://ramanasa.com"
-          echo "Deployed: $(date)"
-          echo "========================================="
+          DEPLOY_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          echo "time=$DEPLOY_TIME" >> $GITHUB_OUTPUT
+          echo "Deployment started at: $DEPLOY_TIME"
+
+      - name: Fetch latest commit SHA
+        id: get-commit
+        run: |
+          COMMIT_SHA=$(curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/commits/${{ env.SOURCE_BRANCH }} | jq -r '.sha' | cut -c1-7)
+          echo "sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "Latest commit SHA: $COMMIT_SHA"
+
+      - name: Validate GitHub secrets
+        run: |
+          echo "Validating required secrets..."
+          [ -n "${{ secrets.VPS_HOST }}" ] || { echo "❌ VPS_HOST missing"; exit 1; }
+          [ -n "${{ secrets.VPS_USER }}" ] || { echo "❌ VPS_USER missing"; exit 1; }
+          [ -n "${{ secrets.VPS_SSH_KEY }}" ] || { echo "❌ VPS_SSH_KEY missing"; exit 1; }
+          [ -n "${{ secrets.VPS_PORT }}" ] || { echo "❌ VPS_PORT missing"; exit 1; }
+          echo "✅ All secrets validated"
+
+  # =========================
+  # Stage 2: VPS Connection Check
+  # =========================
+  connection:
+    name: Stage 2 - VPS Connection Check
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Test SSH connection to VPS
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "========================================="
+            echo "VPS Connection Successful!"
+            echo "========================================="
+            echo "Hostname: $(hostname)"
+            echo "User: $(whoami)"
+            echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
+            echo "Uptime: $(uptime -p)"
+            echo "Disk Usage: $(df -h / | awk 'NR==2 {print $5 " used"}')"
+            echo "Memory: $(free -h | awk 'NR==2 {print $3 " / " $2}')"
+            echo "========================================="
+
+      - name: Verify deployment directories exist
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "Checking deployment directories..."
+            [ -d "${{ env.SCRIPTS_PATH }}" ] || { echo "❌ Scripts directory missing"; exit 1; }
+            [ -f "${{ env.SCRIPTS_PATH }}/deploy.sh" ] || { echo "❌ deploy.sh missing"; exit 1; }
+            echo "✅ All directories and scripts present"
+
+  # =========================
+  # Stage 3: Pre-deployment Preparation
+  # =========================
+  prepare:
+    name: Stage 3 - Pre-deployment Preparation
+    runs-on: ubuntu-latest
+    needs: [setup, connection]
+    steps:
+      - name: Backup existing deployment (if exists)
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "Creating backup of current deployment..."
+            if [ -d "${{ env.DEPLOY_PATH }}" ]; then
+              BACKUP_DIR="/var/www/backups/${{ env.SITE_NAME }}"
+              sudo mkdir -p "$BACKUP_DIR"
+              BACKUP_FILE="$BACKUP_DIR/backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+              sudo tar -czf "$BACKUP_FILE" -C "${{ env.DEPLOY_PATH }}" . || echo "No existing deployment to backup"
+              echo "✅ Backup created: $BACKUP_FILE"
+              
+              # Keep only last 5 backups
+              ls -t "$BACKUP_DIR"/backup-*.tar.gz | tail -n +6 | xargs -r rm
+              echo "✅ Old backups cleaned up"
+            else
+              echo "ℹ️ No existing deployment found, skipping backup"
+            fi
+
+      - name: Make deployment script executable
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "Setting script permissions..."
+            cd ${{ env.SCRIPTS_PATH }}
+            chmod +x deploy.sh
+            echo "✅ deploy.sh is executable"
+
+  # =========================
+  # Stage 4: Clone, Build & Deploy
+  # =========================
+  build-and-deploy:
+    name: Stage 4 - Clone, Build and Deploy
+    runs-on: ubuntu-latest
+    needs: [setup, connection, prepare]
+    steps:
+      - name: Execute deployment script
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 15m
+          script: |
+            echo "========================================="
+            echo "Starting Deployment Process"
+            echo "========================================="
+            echo "Site: ${{ env.SITE_NAME }}"
+            echo "Domain: ${{ env.DOMAIN }}"
+            echo "Commit: ${{ needs.setup.outputs.commit-sha }}"
+            echo "Time: ${{ needs.setup.outputs.deploy-time }}"
+            echo "========================================="
+            
+            cd ${{ env.SCRIPTS_PATH }}
+            ./deploy.sh
+            
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ Deployment script failed with exit code $EXIT_CODE"
+              exit $EXIT_CODE
+            fi
+            
+            echo "✅ Deployment script completed successfully"
+
+  # =========================
+  # Stage 5: Verification & Health Check
+  # =========================
+  verify:
+    name: Stage 5 - Verification and Health Check
+    runs-on: ubuntu-latest
+    needs: [setup, connection, prepare, build-and-deploy]
+    steps:
+      - name: Verify deployment files
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "Verifying deployed files..."
+            [ -d "${{ env.DEPLOY_PATH }}" ] || { echo "❌ Deploy directory missing"; exit 1; }
+            [ -f "${{ env.DEPLOY_PATH }}/index.html" ] || { echo "❌ index.html missing"; exit 1; }
+            
+            FILE_COUNT=$(find ${{ env.DEPLOY_PATH }} -type f | wc -l)
+            DIR_SIZE=$(du -sh ${{ env.DEPLOY_PATH }} | cut -f1)
+            
+            echo "✅ Deployment directory exists"
+            echo "📊 Total files: $FILE_COUNT"
+            echo "💾 Total size: $DIR_SIZE"
+
+      - name: Check Nginx status
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "Checking Nginx status..."
+            sudo systemctl is-active nginx || { echo "❌ Nginx is not running"; exit 1; }
+            sudo nginx -t || { echo "❌ Nginx config has errors"; exit 1; }
+            echo "✅ Nginx is running and configured correctly"
+
+      - name: Test website accessibility
+        run: |
+          echo "Testing website accessibility..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ env.DOMAIN }} || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Website is accessible (HTTP $HTTP_CODE)"
+          elif [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+            echo "⚠️ Website redirecting (HTTP $HTTP_CODE) - checking HTTPS..."
+            HTTPS_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://${{ env.DOMAIN }} || echo "000")
+            if [ "$HTTPS_CODE" = "200" ]; then
+              echo "✅ Website is accessible via HTTPS (HTTP $HTTPS_CODE)"
+            else
+              echo "❌ Website not accessible (HTTPS returned $HTTPS_CODE)"
+              exit 1
+            fi
+          else
+            echo "❌ Website not accessible (HTTP $HTTP_CODE)"
+            echo "⚠️ Note: DNS propagation may take 5-30 minutes"
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "==========================================="
+          echo "🎉 DEPLOYMENT SUCCESSFUL!"
+          echo "==========================================="
+          echo "Site: ${{ env.SITE_NAME }}"
+          echo "Domain: ${{ env.DOMAIN }}"
+          echo "Commit: ${{ needs.setup.outputs.commit-sha }}"
+          echo "Deployed: ${{ needs.setup.outputs.deploy-time }}"
+          echo "==========================================="
+          echo "🌐 Visit: https://${{ env.DOMAIN }}"
+          echo "==========================================="
