@@ -1,14 +1,14 @@
 name: Deploy Ramanasa.com
 
 on:
-  workflow_dispatch:  # YOU manually trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-      - name: 📋 Stage 1 - Connection Check
+      - name: Stage 1 - Connection Check
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -16,11 +16,11 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            echo "✅ Connected to VPS successfully!"
+            echo "Connected to VPS successfully!"
             echo "Server: $(hostname)"
             echo "User: $(whoami)"
       
-      - name: 🔄 Stage 2 - Prepare Deployment
+      - name: Stage 2 - Prepare Deployment
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -28,12 +28,12 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            echo "📦 Preparing deployment environment..."
+            echo "Preparing deployment environment..."
             cd /var/www/deployment-hub/sites/ramanasa
             chmod +x deploy.sh
-            echo "✅ Ready to deploy!"
+            echo "Ready to deploy!"
       
-      - name: 🏗️ Stage 3 - Clone & Build
+      - name: Stage 3 - Clone & Build
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -41,11 +41,11 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            echo "🔨 Cloning repo and building site..."
+            echo "Cloning repo and building site..."
             cd /var/www/deployment-hub/sites/ramanasa
             ./deploy.sh
       
-      - name: 🚀 Stage 4 - Deploy to Production
+      - name: Stage 4 - Deploy to Production
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -53,13 +53,13 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            echo "📤 Website deployed to /var/www/sites/ramanasa"
-            echo "🌐 Nginx is now serving ramanasa.com"
+            echo "Website deployed to /var/www/sites/ramanasa"
+            echo "Nginx is now serving ramanasa.com"
       
-      - name: ✅ Stage 5 - Verification
+      - name: Stage 5 - Verification
         run: |
           echo "========================================="
-          echo "🎉 Deployment Complete!"
-          echo "🌐 Live at: https://ramanasa.com"
-          echo "⏰ Deployed: $(date)"
+          echo "Deployment Complete!"
+          echo "Live at: https://ramanasa.com"
+          echo "Deployed: $(date)"
           echo "========================================="
