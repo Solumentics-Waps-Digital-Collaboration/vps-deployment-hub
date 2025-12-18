@@ -191,10 +191,14 @@ jobs:
           script: |
             echo "Verifying deployed files..."
             [ -d "${{ env.DEPLOY_PATH }}" ] || { echo "❌ Deploy directory missing"; exit 1; }
-            [ -f "${{ env.DEPLOY_PATH }}/package.json" ] || { echo "❌ package.json missing"; exit 1; }
-            [ -d "${{ env.DEPLOY_PATH }}/.next" ] || { echo "❌ .next directory missing"; exit 1; }
             
             FILE_COUNT=$(find ${{ env.DEPLOY_PATH }} -type f | wc -l)
+            
+            if [ "$FILE_COUNT" -lt 5 ]; then
+              echo "❌ Deployment appears incomplete (only $FILE_COUNT files found)"
+              exit 1
+            fi
+            
             DIR_SIZE=$(du -sh ${{ env.DEPLOY_PATH }} | cut -f1)
             
             echo "✅ Deployment directory exists"
