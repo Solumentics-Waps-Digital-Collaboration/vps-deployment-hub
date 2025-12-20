@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Configuration
 SITE_NAME="waps-digital"
-DOMAIN="waps-digital.cloud"
+DOMAIN="wapsdigital.cloud"
 GITHUB_REPO="https://${GH_TOKEN}@github.com/Solumentics-Waps-Digital-Collaboration/waps-digital.git"
 BRANCH="main"
 DEPLOY_DIR="/var/www/sites/${SITE_NAME}"

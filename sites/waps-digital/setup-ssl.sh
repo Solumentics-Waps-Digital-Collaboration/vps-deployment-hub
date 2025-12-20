@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Configuration
-DOMAIN="waps-digital.cloud"
+DOMAIN="wapsdigital.cloud"
 EMAIL="your-email@example.com"  # CHANGE THIS TO YOUR EMAIL
 
 # Colors

@@ -12,7 +12,7 @@ on:
 
 env:
   SITE_NAME: waps-digital
-  DOMAIN: waps-digital.cloud
+  DOMAIN: wapsdigital.cloud
   SOURCE_REPO: Solumentics-Waps-Digital-Collaboration/waps-digital
   SOURCE_BRANCH: main
   DEPLOY_PATH: /var/www/sites/waps-digital
