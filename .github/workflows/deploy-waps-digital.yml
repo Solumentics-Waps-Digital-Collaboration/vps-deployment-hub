@@ -132,6 +132,9 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           command_timeout: 30m
+          envs: GH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           script: |
             echo "========================================="
             echo "Starting Deployment Process"
