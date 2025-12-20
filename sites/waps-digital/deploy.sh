@@ -52,6 +52,7 @@ rsync -av --delete \
     --exclude 'node_modules' \
     --exclude '.git' \
     --exclude '.next' \
+    --exclude '.env' \
     ./ "$DEPLOY_DIR/"
 
 # Step 5: Create production docker-compose
