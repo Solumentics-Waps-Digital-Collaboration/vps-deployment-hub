@@ -8,7 +8,6 @@ DOMAIN="waps-digital.cloud"
 GITHUB_REPO="https://${GH_TOKEN}@github.com/Solumentics-Waps-Digital-Collaboration/waps-digital.git"
 BRANCH="main"
 DEPLOY_DIR="/var/www/sites/${SITE_NAME}"
-SCRIPTS_DIR="/var/www/deployment-hub/sites/${SITE_NAME}"
 TEMP_DIR=$(mktemp -d)
 
 # Colors
@@ -29,25 +28,25 @@ cleanup() {
 trap cleanup EXIT
 
 # Step 1: Clone repository
-echo -e "${YELLOW}[1/11] Cloning repository...${NC}"
+echo -e "${YELLOW}[1/10] Cloning repository...${NC}"
 cd "$TEMP_DIR"
 git clone --depth 1 --branch "$BRANCH" "$GITHUB_REPO" site
 cd site
 
 # Step 2: Create deployment directory
-echo -e "${YELLOW}[2/11] Preparing deployment directory...${NC}"
+echo -e "${YELLOW}[2/10] Preparing deployment directory...${NC}"
 sudo mkdir -p "$DEPLOY_DIR"
 sudo chown -R deploy:deploy "$DEPLOY_DIR"
 
 # Step 3: Stop existing containers
-echo -e "${YELLOW}[3/11] Stopping existing containers...${NC}"
+echo -e "${YELLOW}[3/10] Stopping existing containers...${NC}"
 if [ -d "$DEPLOY_DIR" ] && [ -f "$DEPLOY_DIR/docker-compose.prod.yml" ]; then
     cd "$DEPLOY_DIR"
     docker-compose -f docker-compose.prod.yml down || true
 fi
 
 # Step 4: Copy files to deployment directory
-echo -e "${YELLOW}[4/11] Copying files...${NC}"
+echo -e "${YELLOW}[4/10] Copying files...${NC}"
 cd "$TEMP_DIR/site"
 rsync -av --delete \
     --exclude 'node_modules' \
@@ -57,18 +56,8 @@ rsync -av --delete \
     --exclude 'docker-compose.prod.yml' \
     ./ "$DEPLOY_DIR/"
 
-# Step 5: Copy custom Dockerfile
-echo -e "${YELLOW}[5/11] Copying custom Dockerfile...${NC}"
-if [ -f "$SCRIPTS_DIR/Dockerfile.prod" ]; then
-    cp "$SCRIPTS_DIR/Dockerfile.prod" "$DEPLOY_DIR/Dockerfile.prod"
-    echo "Custom Dockerfile.prod copied"
-else
-    echo -e "${RED}ERROR: Dockerfile.prod not found at $SCRIPTS_DIR/Dockerfile.prod${NC}"
-    exit 1
-fi
-
-# Step 6: Create production docker-compose
-echo -e "${YELLOW}[6/11] Creating production docker-compose...${NC}"
+# Step 5: Create production docker-compose
+echo -e "${YELLOW}[5/10] Creating production docker-compose...${NC}"
 cd "$DEPLOY_DIR"
 cat > docker-compose.prod.yml <<'EOF'
 version: '3'
@@ -103,8 +92,8 @@ volumes:
   media_uploads:
 EOF
 
-# Step 7: Check for .env file
-echo -e "${YELLOW}[7/11] Checking environment variables...${NC}"
+# Step 6: Check for .env file
+echo -e "${YELLOW}[6/10] Checking environment variables...${NC}"
 if [ ! -f "$DEPLOY_DIR/.env" ]; then
     echo -e "${RED}ERROR: .env file not found!${NC}"
     echo -e "${YELLOW}Please create .env file at: $DEPLOY_DIR/.env${NC}"
@@ -115,16 +104,16 @@ if [ ! -f "$DEPLOY_DIR/.env" ]; then
     exit 1
 fi
 
-# Step 8: Build Docker image
-echo -e "${YELLOW}[8/11] Building Docker image...${NC}"
+# Step 7: Build Docker image
+echo -e "${YELLOW}[7/10] Building Docker image...${NC}"
 docker-compose -f docker-compose.prod.yml build --no-cache
 
-# Step 9: Start containers
-echo -e "${YELLOW}[9/11] Starting containers...${NC}"
+# Step 8: Start containers
+echo -e "${YELLOW}[8/10] Starting containers...${NC}"
 docker-compose -f docker-compose.prod.yml up -d
 
-# Step 10: Wait for app to be ready
-echo -e "${YELLOW}[10/11] Waiting for application to start...${NC}"
+# Step 9: Wait for app to be ready
+echo -e "${YELLOW}[9/10] Waiting for application to start...${NC}"
 sleep 15
 
 # Check if containers are running
@@ -134,8 +123,8 @@ if ! docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
     exit 1
 fi
 
-# Step 11: Test application
-echo -e "${YELLOW}[11/11] Testing application...${NC}"
+# Step 10: Test application
+echo -e "${YELLOW}[10/10] Testing application...${NC}"
 MAX_RETRIES=12
 RETRY_COUNT=0
 
