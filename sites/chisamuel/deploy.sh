@@ -35,7 +35,7 @@ cd site
 
 # Step 2: Install dependencies
 echo -e "${YELLOW}[2/8] Installing dependencies...${NC}"
-npm ci --production=false
+npm ci --production=false --legacy-peer-deps
 
 # Step 3: Build the site
 echo -e "${YELLOW}[3/8] Building Next.js site...${NC}"
