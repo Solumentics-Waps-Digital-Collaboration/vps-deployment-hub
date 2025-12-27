@@ -1,0 +1,131 @@
+name: Deploy ChiSamuel.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options: [production]
+        default: production
+
+env:
+  SITE_NAME: chisamuel
+  DOMAIN: chisamuel.com
+  SOURCE_REPO: ChiSamuelA/chisamuel
+  SOURCE_BRANCH: main
+  DEPLOY_PATH: /var/www/sites/chisamuel
+  SCRIPTS_PATH: /var/www/deployment-hub/sites/chisamuel
+
+jobs:
+  setup:
+    name: Stage 1 - Setup and Validation
+    runs-on: ubuntu-latest
+    outputs:
+      commit-sha: ${{ steps.get-commit.outputs.sha }}
+      deploy-time: ${{ steps.get-time.outputs.time }}
+    steps:
+      - name: Get deployment timestamp
+        id: get-time
+        run: |
+          DEPLOY_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          echo "time=$DEPLOY_TIME" >> $GITHUB_OUTPUT
+
+      - name: Fetch latest commit SHA
+        id: get-commit
+        run: |
+          COMMIT_SHA=$(curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/commits/${{ env.SOURCE_BRANCH }} | jq -r '.sha' | cut -c1-7)
+          echo "sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Validate GitHub secrets
+        run: |
+          [ -n "${{ secrets.VPS_HOST }}" ] || { echo "VPS_HOST missing"; exit 1; }
+          [ -n "${{ secrets.VPS_USER }}" ] || { echo "VPS_USER missing"; exit 1; }
+          [ -n "${{ secrets.VPS_SSH_KEY }}" ] || { echo "VPS_SSH_KEY missing"; exit 1; }
+          [ -n "${{ secrets.VPS_PORT }}" ] || { echo "VPS_PORT missing"; exit 1; }
+
+  connection:
+    name: Stage 2 - VPS Connection Check
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Test SSH connection
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "VPS Connection Successful!"
+            [ -d "${{ env.SCRIPTS_PATH }}" ] || { echo "Scripts directory missing"; exit 1; }
+
+  prepare:
+    name: Stage 3 - Pre-deployment Preparation
+    runs-on: ubuntu-latest
+    needs: [setup, connection]
+    steps:
+      - name: Backup and prepare
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            if [ -d "${{ env.DEPLOY_PATH }}" ]; then
+              BACKUP_DIR="/var/www/backups/${{ env.SITE_NAME }}"
+              sudo mkdir -p "$BACKUP_DIR"
+              sudo tar -czf "$BACKUP_DIR/backup-$(date +%Y%m%d-%H%M%S).tar.gz" -C "${{ env.DEPLOY_PATH }}" . || true
+              ls -t "$BACKUP_DIR"/backup-*.tar.gz | tail -n +6 | xargs -r rm
+            fi
+            cd ${{ env.SCRIPTS_PATH }}
+            chmod +x deploy.sh
+
+  build-and-deploy:
+    name: Stage 4 - Build and Deploy
+    runs-on: ubuntu-latest
+    needs: [setup, connection, prepare]
+    steps:
+      - name: Execute deployment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 15m
+          script: |
+            cd ${{ env.SCRIPTS_PATH }}
+            ./deploy.sh
+
+  verify:
+    name: Stage 5 - Verification
+    runs-on: ubuntu-latest
+    needs: [setup, connection, prepare, build-and-deploy]
+    steps:
+      - name: Verify deployment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            [ -d "${{ env.DEPLOY_PATH }}" ] || { echo "Deploy directory missing"; exit 1; }
+            FILE_COUNT=$(find ${{ env.DEPLOY_PATH }} -type f | wc -l)
+            if [ "$FILE_COUNT" -lt 5 ]; then
+              echo "Deployment incomplete"
+              exit 1
+            fi
+            sudo nginx -t
+            echo "Deployment successful!"
+
+      - name: Deployment summary
+        run: |
+          echo "==========================================="
+          echo "DEPLOYMENT SUCCESSFUL!"
+          echo "Site: chisamuel.com"
+          echo "Visit: https://chisamuel.com"
+          echo "==========================================="
