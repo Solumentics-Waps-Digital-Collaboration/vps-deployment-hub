@@ -88,7 +88,7 @@ if [ ! -f "$DEPLOY_DIR/.env" ]; then
     echo "SMTP_HOST=smtp.hostinger.com"
     echo "SMTP_PORT=465"
     echo "SMTP_USER=info@ramanasa.com"
-    echo 'SMTP_PASSWORD="RamanaSA2025@#"'
+    echo 'SMTP_PASSWORD="your-password-here"'
     exit 1
 fi
 
