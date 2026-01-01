@@ -17,7 +17,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Deploying ${DOMAIN}${NC}"
+echo -e "${GREEN}Deploying ${DOMAIN} (Next.js SSR)${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # Cleanup function
@@ -28,56 +28,110 @@ cleanup() {
 trap cleanup EXIT
 
 # Step 1: Clone repository
-echo -e "${YELLOW}[1/8] Cloning repository...${NC}"
+echo -e "${YELLOW}[1/10] Cloning repository...${NC}"
 cd "$TEMP_DIR"
 git clone --depth 1 --branch "$BRANCH" "$GITHUB_REPO" site
 cd site
 
-# Step 2: Install dependencies
-echo -e "${YELLOW}[2/8] Installing dependencies...${NC}"
-npm ci --production=false
-
-# Step 3: Build the site
-echo -e "${YELLOW}[3/8] Building Next.js site...${NC}"
-npm run build
-
-# Check if build was successful
-if [ ! -d "out" ] && [ ! -d ".next" ]; then
-    echo -e "${RED}Build failed! No output directory found.${NC}"
-    exit 1
-fi
-
-# Step 4: Create deployment directory
-echo -e "${YELLOW}[4/8] Preparing deployment directory...${NC}"
+# Step 2: Create deployment directory
+echo -e "${YELLOW}[2/10] Preparing deployment directory...${NC}"
 sudo mkdir -p "$DEPLOY_DIR"
 sudo chown -R deploy:deploy "$DEPLOY_DIR"
 
-# Step 5: Deploy files
-echo -e "${YELLOW}[5/8] Deploying files...${NC}"
-if [ -d "out" ]; then
-    echo "  -> Deploying static export..."
-    rsync -av --delete out/ "$DEPLOY_DIR/"
-elif [ -d ".next" ]; then
-    echo "  -> Deploying SSR build..."
-    rsync -av --delete --exclude 'node_modules' --exclude '.git' ./ "$DEPLOY_DIR/"
+# Step 3: Stop existing containers
+echo -e "${YELLOW}[3/10] Stopping existing containers...${NC}"
+if [ -d "$DEPLOY_DIR" ] && [ -f "$DEPLOY_DIR/docker-compose.prod.yml" ]; then
     cd "$DEPLOY_DIR"
-    npm ci --production
+    docker-compose -f docker-compose.prod.yml down || true
 fi
 
-# Step 6: Set permissions
-echo -e "${YELLOW}[6/8] Setting permissions...${NC}"
-sudo chown -R deploy:www-data "$DEPLOY_DIR"
-sudo chmod -R 755 "$DEPLOY_DIR"
+# Step 4: Copy files to deployment directory
+echo -e "${YELLOW}[4/10] Copying files...${NC}"
+cd "$TEMP_DIR/site"
+rsync -av --delete \
+    --exclude 'node_modules' \
+    --exclude '.git' \
+    --exclude '.next' \
+    --exclude '.env' \
+    --exclude 'docker-compose.prod.yml' \
+    ./ "$DEPLOY_DIR/"
 
-# Step 7: Test Nginx
-echo -e "${YELLOW}[7/8] Testing Nginx configuration...${NC}"
+# Step 5: Create production docker-compose
+echo -e "${YELLOW}[5/10] Creating production docker-compose...${NC}"
+cd "$DEPLOY_DIR"
+cat > docker-compose.prod.yml <<'EOF'
+version: '3'
+
+services:
+  amasia:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    ports:
+      - '3004:3000'
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  node_modules:
+EOF
+
+# Step 6: Check for .env file
+echo -e "${YELLOW}[6/10] Checking environment variables...${NC}"
+if [ ! -f "$DEPLOY_DIR/.env" ]; then
+    echo -e "${RED}ERROR: .env file not found!${NC}"
+    echo -e "${YELLOW}Please create .env file at: $DEPLOY_DIR/.env${NC}"
+    echo -e "${YELLOW}Required variables:${NC}"
+    echo "SMTP_HOST=smtp.hostinger.com"
+    echo "SMTP_PORT=465"
+    echo "SMTP_USER=info@csb-amasia.com"
+    echo 'SMTP_PASSWORD="your-password-here"'
+    exit 1
+fi
+
+# Step 7: Build Docker image
+echo -e "${YELLOW}[7/10] Building Docker image...${NC}"
+docker-compose -f docker-compose.prod.yml build --no-cache
+
+# Step 8: Start containers
+echo -e "${YELLOW}[8/10] Starting containers...${NC}"
+docker-compose -f docker-compose.prod.yml up -d
+
+# Step 9: Wait for app to be ready
+echo -e "${YELLOW}[9/10] Waiting for application to start...${NC}"
+sleep 15
+
+# Check if containers are running
+if ! docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    echo -e "${RED}ERROR: Containers failed to start!${NC}"
+    docker-compose -f docker-compose.prod.yml logs --tail=100
+    exit 1
+fi
+
+# Step 10: Test and reload Nginx
+echo -e "${YELLOW}[10/10] Reloading Nginx...${NC}"
+MAX_RETRIES=12
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -f http://localhost:3004 > /dev/null 2>&1; then
+        echo -e "${GREEN}Application is responding!${NC}"
+        break
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "Waiting for application... ($RETRY_COUNT/$MAX_RETRIES)"
+    sleep 5
+done
+
 sudo nginx -t
-
-# Step 8: Reload Nginx
-echo -e "${YELLOW}[8/8] Reloading Nginx...${NC}"
 sudo systemctl reload nginx
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Deployment Successful!${NC}"
+echo -e "${GREEN}Docker containers running${NC}"
 echo -e "${GREEN}Visit: https://${DOMAIN}${NC}"
 echo -e "${GREEN}========================================${NC}"
+docker-compose -f docker-compose.prod.yml ps
