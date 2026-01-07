@@ -56,11 +56,11 @@ rsync -av --delete \
     --exclude 'docker-compose.prod.yml' \
     ./ "$DEPLOY_DIR/"
 
-# Step 5: Create production docker-compose
+# Step 5: Create production docker-compose with CPU/memory limits
 echo -e "${YELLOW}[5/10] Creating production docker-compose...${NC}"
 cd "$DEPLOY_DIR"
 cat > docker-compose.prod.yml <<'EOF'
-version: '3'
+version: '3.8'
 
 services:
   payload:
@@ -76,6 +76,14 @@ services:
     restart: unless-stopped
     volumes:
       - media_uploads:/app/public
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   mongo:
     image: mongo:latest
@@ -86,6 +94,14 @@ services:
     volumes:
       - mongo_data:/data/db
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 volumes:
   mongo_data:
@@ -145,7 +161,7 @@ fi
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Deployment Successful!${NC}"
-echo -e "${GREEN}Docker containers running${NC}"
+echo -e "${GREEN}Docker containers running with CPU/memory limits${NC}"
 echo -e "${GREEN}Visit: https://${DOMAIN}${NC}"
 echo -e "${GREEN}Admin: https://${DOMAIN}/admin${NC}"
 echo -e "${GREEN}========================================${NC}"

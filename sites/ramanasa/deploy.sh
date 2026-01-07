@@ -56,11 +56,11 @@ rsync -av --delete \
     --exclude 'docker-compose.prod.yml' \
     ./ "$DEPLOY_DIR/"
 
-# Step 5: Create production docker-compose
+# Step 5: Create production docker-compose with CPU/memory limits
 echo -e "${YELLOW}[5/10] Creating production docker-compose...${NC}"
 cd "$DEPLOY_DIR"
 cat > docker-compose.prod.yml <<'EOF'
-version: '3'
+version: '3.8'
 
 services:
   ramanasa:
@@ -74,6 +74,14 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
 volumes:
   node_modules:
@@ -131,7 +139,7 @@ sudo systemctl reload nginx
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Deployment Successful!${NC}"
-echo -e "${GREEN}Docker containers running${NC}"
+echo -e "${GREEN}Docker containers running with CPU/memory limits${NC}"
 echo -e "${GREEN}Visit: https://${DOMAIN}${NC}"
 echo -e "${GREEN}========================================${NC}"
 docker-compose -f docker-compose.prod.yml ps
