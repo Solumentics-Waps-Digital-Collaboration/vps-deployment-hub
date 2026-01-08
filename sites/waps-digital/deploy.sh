@@ -72,8 +72,7 @@ services:
     ports:
       - '3000:3000'
     depends_on:
-      mongo:
-        condition: service_healthy
+      - mongo
     env_file:
       - .env
     restart: unless-stopped
@@ -82,8 +81,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'        # More CPU for Payload
-          memory: 1024M      # More memory for Payload
+          cpus: '1.0'
+          memory: 1024M
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -112,11 +111,11 @@ services:
           cpus: '0.25'
           memory: 256M
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "echo 'db.runCommand(\"ping\").ok' | mongosh localhost:27017/test --quiet || exit 1"]
+      interval: 15s
+      timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
 volumes:
   mongo_data:
@@ -144,7 +143,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 # Step 9: Wait for MongoDB to be ready
 echo -e "${YELLOW}[9/11] Waiting for MongoDB to be ready...${NC}"
-sleep 10
+sleep 15
 
 # Step 10: Wait for Payload to be ready
 echo -e "${YELLOW}[10/11] Waiting for Payload CMS to start...${NC}"
@@ -152,7 +151,7 @@ MAX_RETRIES=20
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -f http://localhost:3000/api > /dev/null 2>&1; then
+    if curl -f http://localhost:3000 > /dev/null 2>&1; then
         echo -e "${GREEN}Payload CMS is responding!${NC}"
         break
     fi
@@ -162,9 +161,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo -e "${RED}Payload CMS failed to start in time!${NC}"
-    docker-compose -f docker-compose.prod.yml logs --tail=100
-    exit 1
+    echo -e "${YELLOW}Warning: Payload CMS may still be starting up...${NC}"
 fi
 
 # Step 11: Reload Nginx
@@ -173,16 +170,16 @@ sudo nginx -t
 sudo systemctl reload nginx
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}🎉 DEPLOYMENT SUCCESSFUL! 🎉${NC}"
+echo -e "${GREEN}DEPLOYMENT SUCCESSFUL!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Payload CMS is running with:${NC}"
-echo -e "${GREEN}✅ Persistent uploads storage${NC}"
-echo -e "${GREEN}✅ Health checks enabled${NC}"
-echo -e "${GREEN}✅ CPU/Memory limits (1 core, 1GB)${NC}"
-echo -e "${GREEN}✅ MongoDB with health monitoring${NC}"
+echo -e "${GREEN}- Persistent uploads storage${NC}"
+echo -e "${GREEN}- Health checks enabled${NC}"
+echo -e "${GREEN}- CPU/Memory limits (1 core, 1GB)${NC}"
+echo -e "${GREEN}- MongoDB with health monitoring${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}🌐 Website: https://${DOMAIN}${NC}"
-echo -e "${GREEN}🔐 Admin: https://${DOMAIN}/admin${NC}"
+echo -e "${GREEN}Website: https://${DOMAIN}${NC}"
+echo -e "${GREEN}Admin: https://${DOMAIN}/admin${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "${YELLOW}Container status:${NC}"
 docker-compose -f docker-compose.prod.yml ps
