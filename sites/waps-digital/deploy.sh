@@ -28,25 +28,26 @@ cleanup() {
 trap cleanup EXIT
 
 # Step 1: Clone repository
-echo -e "${YELLOW}[1/10] Cloning repository...${NC}"
+echo -e "${YELLOW}[1/11] Cloning repository...${NC}"
 cd "$TEMP_DIR"
 git clone --depth 1 --branch "$BRANCH" "$GITHUB_REPO" site
 cd site
 
-# Step 2: Create deployment directory
-echo -e "${YELLOW}[2/10] Preparing deployment directory...${NC}"
+# Step 2: Create deployment directory and persistent storage
+echo -e "${YELLOW}[2/11] Preparing deployment directory and storage...${NC}"
 sudo mkdir -p "$DEPLOY_DIR"
+sudo mkdir -p "$DEPLOY_DIR/uploads/media"  # Persistent uploads
 sudo chown -R deploy:deploy "$DEPLOY_DIR"
 
 # Step 3: Stop existing containers
-echo -e "${YELLOW}[3/10] Stopping existing containers...${NC}"
+echo -e "${YELLOW}[3/11] Stopping existing containers...${NC}"
 if [ -d "$DEPLOY_DIR" ] && [ -f "$DEPLOY_DIR/docker-compose.prod.yml" ]; then
     cd "$DEPLOY_DIR"
     docker-compose -f docker-compose.prod.yml down || true
 fi
 
 # Step 4: Copy files to deployment directory
-echo -e "${YELLOW}[4/10] Copying files...${NC}"
+echo -e "${YELLOW}[4/11] Copying files...${NC}"
 cd "$TEMP_DIR/site"
 rsync -av --delete \
     --exclude 'node_modules' \
@@ -54,10 +55,11 @@ rsync -av --delete \
     --exclude '.next' \
     --exclude '.env' \
     --exclude 'docker-compose.prod.yml' \
+    --exclude 'uploads' \
     ./ "$DEPLOY_DIR/"
 
-# Step 5: Create production docker-compose with CPU/memory limits
-echo -e "${YELLOW}[5/10] Creating production docker-compose...${NC}"
+# Step 5: Create production docker-compose with BULLETPROOF config
+echo -e "${YELLOW}[5/11] Creating production docker-compose...${NC}"
 cd "$DEPLOY_DIR"
 cat > docker-compose.prod.yml <<'EOF'
 version: '3.8'
@@ -70,23 +72,30 @@ services:
     ports:
       - '3000:3000'
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     env_file:
       - .env
     restart: unless-stopped
     volumes:
-      - media_uploads:/app/public
+      - ./uploads/media:/app/public/media  # PERSISTENT uploads!
     deploy:
       resources:
         limits:
+          cpus: '1.0'        # More CPU for Payload
+          memory: 1024M      # More memory for Payload
+        reservations:
           cpus: '0.5'
           memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
   mongo:
-    image: mongo:latest
+    image: mongo:7
     ports:
       - '27017:27017'
     command:
@@ -97,73 +106,83 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '0.75'
+          memory: 768M
         reservations:
           cpus: '0.25'
           memory: 256M
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   mongo_data:
-  media_uploads:
 EOF
 
 # Step 6: Check for .env file
-echo -e "${YELLOW}[6/10] Checking environment variables...${NC}"
+echo -e "${YELLOW}[6/11] Checking environment variables...${NC}"
 if [ ! -f "$DEPLOY_DIR/.env" ]; then
     echo -e "${RED}ERROR: .env file not found!${NC}"
     echo -e "${YELLOW}Please create .env file at: $DEPLOY_DIR/.env${NC}"
     echo -e "${YELLOW}Required variables:${NC}"
-    echo "DATABASE_URL=mongodb://mongo:27017/waps-digital"
+    echo "DATABASE_URI=mongodb://mongo:27017/waps-digital"
     echo "PAYLOAD_SECRET=your-secret-key-here"
-    echo "NEXT_PUBLIC_SERVER_URL=https://waps-digital.cloud"
+    echo "NEXT_PUBLIC_SERVER_URL=https://wapsdigital.cloud"
     exit 1
 fi
 
-# Step 7: Build Docker image
-echo -e "${YELLOW}[7/10] Building Docker image...${NC}"
-docker-compose -f docker-compose.prod.yml build --no-cache
+# Step 7: Build Docker image (with lower priority to not crash server)
+echo -e "${YELLOW}[7/11] Building Docker image (this may take 5-10 minutes)...${NC}"
+nice -n 19 docker-compose -f docker-compose.prod.yml build --no-cache
 
 # Step 8: Start containers
-echo -e "${YELLOW}[8/10] Starting containers...${NC}"
+echo -e "${YELLOW}[8/11] Starting containers...${NC}"
 docker-compose -f docker-compose.prod.yml up -d
 
-# Step 9: Wait for app to be ready
-echo -e "${YELLOW}[9/10] Waiting for application to start...${NC}"
-sleep 15
+# Step 9: Wait for MongoDB to be ready
+echo -e "${YELLOW}[9/11] Waiting for MongoDB to be ready...${NC}"
+sleep 10
 
-# Check if containers are running
-if ! docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
-    echo -e "${RED}ERROR: Containers failed to start!${NC}"
+# Step 10: Wait for Payload to be ready
+echo -e "${YELLOW}[10/11] Waiting for Payload CMS to start...${NC}"
+MAX_RETRIES=20
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -f http://localhost:3000/api > /dev/null 2>&1; then
+        echo -e "${GREEN}Payload CMS is responding!${NC}"
+        break
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "Waiting for Payload CMS... ($RETRY_COUNT/$MAX_RETRIES)"
+    sleep 10
+done
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    echo -e "${RED}Payload CMS failed to start in time!${NC}"
     docker-compose -f docker-compose.prod.yml logs --tail=100
     exit 1
 fi
 
-# Step 10: Test application
-echo -e "${YELLOW}[10/10] Testing application...${NC}"
-MAX_RETRIES=12
-RETRY_COUNT=0
-
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -f http://localhost:3000 > /dev/null 2>&1; then
-        echo -e "${GREEN}Application is responding!${NC}"
-        break
-    fi
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    echo "Waiting for application... ($RETRY_COUNT/$MAX_RETRIES)"
-    sleep 5
-done
-
-if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo -e "${YELLOW}Warning: Application may still be starting up...${NC}"
-    echo -e "${YELLOW}Check logs with: docker-compose -f docker-compose.prod.yml logs${NC}"
-fi
+# Step 11: Reload Nginx
+echo -e "${YELLOW}[11/11] Reloading Nginx...${NC}"
+sudo nginx -t
+sudo systemctl reload nginx
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Deployment Successful!${NC}"
-echo -e "${GREEN}Docker containers running with CPU/memory limits${NC}"
-echo -e "${GREEN}Visit: https://${DOMAIN}${NC}"
-echo -e "${GREEN}Admin: https://${DOMAIN}/admin${NC}"
+echo -e "${GREEN}🎉 DEPLOYMENT SUCCESSFUL! 🎉${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Payload CMS is running with:${NC}"
+echo -e "${GREEN}✅ Persistent uploads storage${NC}"
+echo -e "${GREEN}✅ Health checks enabled${NC}"
+echo -e "${GREEN}✅ CPU/Memory limits (1 core, 1GB)${NC}"
+echo -e "${GREEN}✅ MongoDB with health monitoring${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}🌐 Website: https://${DOMAIN}${NC}"
+echo -e "${GREEN}🔐 Admin: https://${DOMAIN}/admin${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "${YELLOW}Container status:${NC}"
 docker-compose -f docker-compose.prod.yml ps
